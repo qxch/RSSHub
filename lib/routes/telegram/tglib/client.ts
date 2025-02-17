@@ -1,15 +1,15 @@
-import readline from 'node:readline/promises';
 import { Api, TelegramClient } from 'telegram';
 import { UserAuthParams } from 'telegram/client/auth';
 import { StringSession } from 'telegram/sessions';
 import { getAppropriatedPartSize } from 'telegram/Utils';
 
 import { config } from '@/config';
+import ConfigNotFoundError from '@/errors/types/config-not-found';
 
 let client: TelegramClient | undefined;
 export async function getClient(authParams?: UserAuthParams, session?: string) {
     if (!config.telegram.session && session === undefined) {
-        throw new Error('TELEGRAM_SESSION is not configured');
+        throw new ConfigNotFoundError('TELEGRAM_SESSION is not configured');
     }
     if (client) {
         return client;
@@ -23,14 +23,18 @@ export async function getClient(authParams?: UserAuthParams, session?: string) {
         autoReconnect: true,
         retryDelay: 3000,
         maxConcurrentDownloads: Number(config.telegram.maxConcurrentDownloads ?? 10),
+        proxy:
+            config.telegram.proxy?.host && config.telegram.proxy.port && config.telegram.proxy.secret
+                ? {
+                      ip: config.telegram.proxy.host,
+                      port: Number(config.telegram.proxy.port),
+                      MTProxy: true,
+                      secret: config.telegram.proxy.secret,
+                  }
+                : undefined,
     });
-    await client.start(
-        Object.assign(authParams ?? {}, {
-            onError: (err) => {
-                throw new Error('Cannot start TG: ' + err);
-            },
-        }) as any
-    );
+
+    await client.connect();
     return client;
 }
 
@@ -77,7 +81,7 @@ function ExpandInlineBytes(bytes) {
     return real;
 }
 
-function getMediaLink(ctx, channel, channelName, message) {
+function getMediaLink(ctx, channel: Api.InputPeerChannel, channelName: string, message: Api.Message) {
     const base = `${ctx.protocol}://${ctx.host}/telegram/channel/${channelName}`;
     const src = base + `${channel.channelId}_${message.id}`;
 
@@ -98,7 +102,7 @@ function getMediaLink(ctx, channel, channelName, message) {
         linkText += ` (${humanFileSize(x.document.size)})`;
         return `<a href="${src}" target="_blank"><img src="${src}?thumb" alt=""/><br/>${linkText}</a>`;
     }
-    return;
+    return '';
 }
 function getFilename(x) {
     if (x instanceof Api.MessageMediaDocument) {
@@ -187,20 +191,3 @@ function streamDocument(obj, thumbSize = '', offset, limit) {
 }
 
 export { client, getMediaLink, decodeMedia, getFilename, streamDocument, streamThumbnail };
-
-if (require.main === module) {
-    Promise.resolve().then(async () => {
-        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-        const client = await getClient(
-            {
-                phoneNumber: () => rl.question('Please enter your phone number: '),
-                password: () => rl.question('Please enter your password: '),
-                phoneCode: () => rl.question('Please enter the code you received: '),
-                onError: (err) => process.stderr.write(err.toString()),
-            },
-            ''
-        );
-        process.stdout.write(`TELEGRAM_SESSION=${client.session.save()}\n`);
-        process.exit(0);
-    });
-}
